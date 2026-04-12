@@ -1,0 +1,5 @@
+{
+  "name": "Plant Life Lab",
+  "description": "A real photosynthesis and plant growth simulator with environmental factors like sunlight intensity, temperature, and pests.",
+  "requestFramePermissions": []
+}
