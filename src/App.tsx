@@ -110,6 +110,7 @@ const INITIAL_STATE: GameState = {
   calvinDoneToday: false,
   respDoneToday: false,
   weather: 'Sunny',
+  growthPoints: 0,
   waterConsumed: 0,
   lightConsumed: 0,
   co2Consumed: 0,
@@ -125,9 +126,26 @@ export default function App() {
   const [showTutorial, setShowTutorial] = useState(false);
   const [gameState, setGameState] = useState<GameState>(INITIAL_STATE);
   const [activeProcess, setActiveProcess] = useState<'photo' | 'calvin' | 'resp' | null>(null);
+  const [processState, setProcessState] = useState<'collecting' | 'animating'>('collecting');
+  const [animationStep, setAnimationStep] = useState(0);
+  const processStateRef = useRef<'collecting' | 'animating'>('collecting');
+  const animationStepRef = useRef(0);
+  const activeProcessRef = useRef<'photo' | 'calvin' | 'resp' | null>(null);
   const [builtEquation, setBuiltEquation] = useState<string[]>([]);
   const [wateringMode, setWateringMode] = useState(false);
   const [sprayingMode, setSprayingMode] = useState(false);
+
+  useEffect(() => {
+    processStateRef.current = processState;
+  }, [processState]);
+
+  useEffect(() => {
+    animationStepRef.current = animationStep;
+  }, [animationStep]);
+
+  useEffect(() => {
+    activeProcessRef.current = activeProcess;
+  }, [activeProcess]);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const modalCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -227,6 +245,23 @@ export default function App() {
         const nextWater = Math.max(0, prev.waterLevel - waterLoss);
         if (nextWater === 0) nextHealth -= 5;
 
+        // Growth logic: Growth depends on health and glucose, plus a base daily growth
+        let growthGain = 2; // Base growth per day
+        if (nextHealth > 50 && prev.glucose > 20) {
+          growthGain += 3 + Math.floor(nextHealth / 20);
+        } else if (nextHealth > 20) {
+          growthGain += 1;
+        }
+
+        const nextStage = getStage(nextDay);
+        
+        if (nextStage !== prev.stage) {
+          toast.success(`🌱 STAGE UP: Your plant is now a ${nextStage}!`, {
+            icon: '🚀',
+            duration: 5000,
+          });
+        }
+
         const newState = {
           ...prev,
           day: nextDay,
@@ -242,7 +277,8 @@ export default function App() {
           photoDoneToday: false,
           calvinDoneToday: false,
           respDoneToday: false,
-          stage: getStage(nextDay)
+          growthPoints: prev.growthPoints + growthGain,
+          stage: nextStage
         };
 
         checkDeath(newState);
@@ -260,19 +296,19 @@ export default function App() {
   };
 
   const getStage = (day: number): GrowthStage => {
-    if (day < 4) return 'Seed';
-    if (day < 8) return 'Sprout';
-    if (day < 15) return 'Seedling';
-    if (day < 25) return 'Vegetative';
-    if (day < 35) return 'Flowering';
+    if (day < 3) return 'Seed';
+    if (day < 14) return 'Sprout';
+    if (day < 28) return 'Seedling';
+    if (day < 42) return 'Vegetative';
+    if (day < 50) return 'Flowering';
     return 'Fruit';
   };
 
   useEffect(() => {
-    if (!gameStarted) return;
+    if (!gameStarted || activeProcess !== null) return;
     const interval = setInterval(updateEnvironment, 30000); // 30s per half-cycle (1 min per day)
     return () => clearInterval(interval);
-  }, [gameStarted, updateEnvironment]);
+  }, [gameStarted, updateEnvironment, activeProcess]);
 
   // --- Rendering ---
 
@@ -345,7 +381,7 @@ export default function App() {
       ctx.fill();
       
       // Seed crack/sprout hint
-      if (day >= 3) {
+      if (gameState.day >= 2) {
         ctx.strokeStyle = '#22c55e';
         ctx.lineWidth = 2;
         ctx.beginPath();
@@ -354,8 +390,8 @@ export default function App() {
         ctx.stroke();
       }
     } else {
-      const growthFactor = (day - 3) * 12; // Faster visual growth
-      const height = Math.min(350, 30 + growthFactor);
+      // Growth factor based on growthPoints for "step by step" change
+      const height = Math.min(400, 40 + (gameState.growthPoints * 1.8)); 
       
       // Stem with gradient and highlights
       const stemGrad = ctx.createLinearGradient(cx - 10, groundY, cx + 10, groundY);
@@ -364,14 +400,15 @@ export default function App() {
       stemGrad.addColorStop(1, isWilted ? '#451a03' : '#064e3b');
       
       ctx.strokeStyle = stemGrad;
-      ctx.lineWidth = stage === 'Sprout' ? 6 : stage === 'Seedling' ? 10 : 16;
+      // Stem thickness grows with points
+      ctx.lineWidth = Math.min(20, 6 + (gameState.growthPoints / 15));
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       
       ctx.beginPath();
       ctx.moveTo(cx, groundY);
       const curveOffset = isWilted ? 40 : 15;
-      const swayAmount = sway * (height / 100); // More sway at the top
+      const swayAmount = sway * (height / 100); 
       ctx.bezierCurveTo(
         cx - curveOffset + swayAmount * 0.3, groundY - height / 3,
         cx + curveOffset + swayAmount * 0.6, groundY - (height * 2) / 3,
@@ -391,8 +428,8 @@ export default function App() {
       );
       ctx.stroke();
 
-      // Leaves
-      const leafCount = stage === 'Sprout' ? 2 : stage === 'Seedling' ? 4 : stage === 'Vegetative' ? 10 : 16;
+      // Leaves: more granular leaf count based on points
+      const leafCount = Math.min(24, 2 + Math.floor(gameState.growthPoints / 8));
       for (let i = 0; i < leafCount; i++) {
         ctx.save();
         const t = (i + 1) / (leafCount + 1);
@@ -411,8 +448,8 @@ export default function App() {
         const rotation = (i % 2 === 0 ? 0.6 : -0.6) + (isWilted ? 0.5 : 0) + (sway * 0.02);
         ctx.rotate(rotation);
         
-        // Leaf shape with gradient
-        const leafSize = stage === 'Sprout' ? 15 : stage === 'Seedling' ? 25 : 40;
+        // Leaf size grows with points
+        const leafSize = Math.min(50, 15 + (gameState.growthPoints / 4));
         const leafGrad = ctx.createRadialGradient(0, 0, leafSize * 0.2, 0, 0, leafSize);
         leafGrad.addColorStop(0, leafHighlight);
         leafGrad.addColorStop(1, leafColor);
@@ -523,39 +560,42 @@ export default function App() {
     const newParticles: Particle[] = [];
     
     // Realistic spawning based on availability
-    const addParticle = (label: string, color: string, count: number) => {
+    const addParticle = (label: string, color: string, count: number, behavior: 'fall' | 'rise' | 'float' = 'float') => {
       for (let i = 0; i < count; i++) {
+        let vx = (Math.random() - 0.5) * 1.0;
+        let vy = (Math.random() - 0.5) * 1.0;
+        let x = 50 + Math.random() * 500;
+        let y = 50 + Math.random() * 300;
+
+        if (behavior === 'fall') {
+          vy = 1 + Math.random();
+          vx = (Math.random() - 0.5) * 0.5;
+          y = Math.random() * 100 - 50;
+        } else if (behavior === 'rise') {
+          vy = -(1 + Math.random());
+          vx = (Math.random() - 0.5) * 0.5;
+          y = 300 + Math.random() * 100;
+        }
+
         newParticles.push({
           id: Math.random().toString(36).substr(2, 9),
-          x: 50 + Math.random() * 500,
-          y: 50 + Math.random() * 300,
-          vx: (Math.random() - 0.5) * 1.2, // Even slower for easier catching
-          vy: (Math.random() - 0.5) * 1.2, 
-          label,
-          color,
-          size: 30 + Math.random() * 10 // Slightly larger visually
+          x, y, vx, vy, label, color,
+          size: 30 + Math.random() * 10
         });
       }
     };
 
     if (mode === 'photo') {
-      addParticle('CO2', '#94a3b8', 12); // More particles
-      addParticle('H2O', '#3b82f6', Math.max(8, Math.floor(gameState.waterLevel / 8)));
-      addParticle('Light', '#facc15', Math.max(8, Math.floor(gameState.sunlightIntensity / 8)));
-      addParticle('O2', '#67e8f9', 4);
-      addParticle('Glucose', '#f59e0b', 2);
+      addParticle('CO2', '#94a3b8', 12, 'float'); // Need 6
+      addParticle('H2O', '#3b82f6', 12, 'rise'); // Need 6
+      addParticle('Light', '#facc15', 8, 'fall'); // Need 1
     } else if (mode === 'calvin') {
-      addParticle('CO2', '#94a3b8', 10);
-      addParticle('ATP', '#a78bfa', gameState.photoDoneToday ? 12 : 4);
-      addParticle('NADPH', '#f472b6', gameState.photoDoneToday ? 12 : 4);
-      addParticle('Glucose', '#f59e0b', 4);
-      addParticle('RuBP', '#10b981', 6);
+      addParticle('CO2', '#94a3b8', 8, 'float'); // Need 3
+      addParticle('ATP', '#a78bfa', 15, 'float'); // Need 9
+      addParticle('NADPH', '#f472b6', 10, 'float'); // Need 6
     } else if (mode === 'resp') {
-      addParticle('Glucose', '#f59e0b', Math.max(8, Math.floor(gameState.glucose / 4)));
-      addParticle('O2', '#67e8f9', 12);
-      addParticle('CO2', '#94a3b8', 4);
-      addParticle('H2O', '#3b82f6', 4);
-      addParticle('Energy', '#facc15', 4);
+      addParticle('Glucose', '#f59e0b', 6, 'float'); // Need 1
+      addParticle('O2', '#67e8f9', 12, 'float'); // Need 6
     }
 
     particlesRef.current = newParticles;
@@ -569,131 +609,326 @@ export default function App() {
 
     const w = canvas.width;
     const h = canvas.height;
-    const type = activeProcess;
+    const type = activeProcessRef.current;
 
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.4)';
-    ctx.fillRect(0, 0, w, h);
+    if (processStateRef.current === 'animating') {
+      ctx.fillStyle = 'rgba(15, 23, 42, 1)';
+      ctx.fillRect(0, 0, w, h);
+      const cx = w / 2;
+      const cy = h / 2;
+      const time = Date.now() / 1000;
+      const step = animationStepRef.current;
 
-    // --- Draw Internal Plant View ---
-    const cx = w / 2;
-    const groundY = h - 40;
-    const height = 150;
-    
-    // Simplified Plant Outline
-    ctx.strokeStyle = 'rgba(255,255,255,0.1)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(cx, groundY);
-    ctx.lineTo(cx, groundY - height);
-    ctx.stroke();
-    
-    // Draw leaves as targets
-    ctx.fillStyle = 'rgba(22, 101, 52, 0.2)';
-    ctx.beginPath();
-    ctx.ellipse(cx - 30, groundY - 80, 25, 15, 0.5, 0, Math.PI * 2);
-    ctx.ellipse(cx + 30, groundY - 100, 25, 15, -0.5, 0, Math.PI * 2);
-    ctx.fill();
+      const drawMolecule = (x: number, y: number, color: string, label: string, size = 15) => {
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.arc(x, y, size, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = 'white'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(label, x, y);
+      };
 
-    // Internal Flows
-    const time = Date.now() / 1000;
-    if (type === 'photo') {
-      // Water up from roots
-      ctx.fillStyle = '#38bdf8';
-      for (let i = 0; i < 3; i++) {
-        const y = groundY - ((time * 50 + i * 40) % height);
-        ctx.beginPath();
-        ctx.arc(cx, y, 2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      // Light into leaves
-      ctx.fillStyle = '#facc15';
-      const lx = cx + Math.sin(time * 2) * 40;
-      const ly = groundY - 120 + Math.cos(time * 2) * 20;
-      ctx.beginPath();
-      ctx.arc(lx, ly, 3, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (type === 'calvin') {
-      // CO2 into leaves
-      ctx.fillStyle = '#94a3b8';
-      for (let i = 0; i < 3; i++) {
-        const x = cx + 60 - ((time * 30 + i * 20) % 40);
-        const y = groundY - 100 + Math.sin(time + i) * 10;
-        ctx.beginPath();
-        ctx.arc(x, y, 2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      // Glucose appearing in leaves
-      ctx.fillStyle = '#fbbf24';
-      ctx.beginPath();
-      ctx.arc(cx - 30, groundY - 80, 4, 0, Math.PI * 2);
-      ctx.arc(cx + 30, groundY - 100, 4, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (type === 'resp') {
-      // Glucose moving from leaves to stem
-      ctx.fillStyle = '#fbbf24';
-      const gy = groundY - height + ((time * 40) % height);
-      ctx.beginPath();
-      ctx.arc(cx, gy, 3, 0, Math.PI * 2);
-      ctx.fill();
-      // Energy sparkles
-      ctx.fillStyle = '#fef08a';
-      for (let i = 0; i < 5; i++) {
-        const sx = cx + (Math.random() - 0.5) * 40;
-        const sy = groundY - height/2 + (Math.random() - 0.5) * 60;
-        ctx.beginPath();
-        ctx.arc(sx, sy, 1, 0, Math.PI * 2);
-        ctx.fill();
+      if (type === 'photo') {
+        // Thylakoid Membrane
+        ctx.fillStyle = '#166534';
+        ctx.fillRect(50, cy - 20, w - 100, 40);
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.font = '16px sans-serif'; ctx.textAlign = 'center'; ctx.fillText("Thylakoid Membrane", cx, cy - 30);
+        ctx.fillText("Stroma (Outside)", cx, cy - 80);
+        ctx.fillText("Lumen (Inside)", cx, cy + 80);
+
+        // PSII
+        ctx.fillStyle = '#047857';
+        ctx.fillRect(150, cy - 40, 60, 80);
+        ctx.fillStyle = 'white'; ctx.fillText("PSII", 180, cy);
+
+        // Cytochrome b6f
+        ctx.fillStyle = '#0f766e';
+        ctx.fillRect(300, cy - 30, 50, 60);
+        ctx.fillStyle = 'white'; ctx.fillText("Cyt", 325, cy);
+
+        // PSI
+        ctx.fillStyle = '#047857';
+        ctx.fillRect(450, cy - 40, 60, 80);
+        ctx.fillStyle = 'white'; ctx.fillText("PSI", 480, cy);
+
+        // ATP Synthase
+        ctx.fillStyle = '#b45309';
+        ctx.fillRect(600, cy - 30, 60, 100);
+        ctx.fillStyle = 'white'; ctx.fillText("ATP Syn", 630, cy + 20);
+
+        if (step >= 0) {
+          // Light hitting PSII
+          const lx = 180 + Math.sin(time * 5) * 10;
+          const ly = cy - 100 + Math.cos(time * 5) * 10;
+          drawMolecule(lx, ly, '#facc15', 'Light', 20);
+          ctx.strokeStyle = '#facc15'; ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(180, cy - 40); ctx.stroke();
+        }
+        if (step >= 1) {
+          // H2O splitting
+          drawMolecule(180, cy + 100, '#3b82f6', 'H2O');
+          ctx.strokeStyle = 'white'; ctx.beginPath(); ctx.moveTo(180, cy + 85); ctx.lineTo(180, cy + 40); ctx.stroke();
+          drawMolecule(140, cy + 60, '#67e8f9', 'O2');
+          drawMolecule(220, cy + 60, '#ef4444', 'H+');
+        }
+        if (step >= 2) {
+          // Electrons moving
+          const ex = 180 + ((time * 100) % 270);
+          const ey = cy - 20 + Math.sin(time * 10) * 10;
+          drawMolecule(ex, ey, '#fbbf24', 'e-', 10);
+          // Protons pumping
+          const px = 325;
+          const py = cy - 60 + ((time * 50) % 120);
+          drawMolecule(px, py, '#ef4444', 'H+', 12);
+        }
+        if (step >= 3) {
+          // Protons through ATP Synthase
+          const px2 = 630;
+          const py2 = cy + 60 - ((time * 50) % 120);
+          drawMolecule(px2, py2, '#ef4444', 'H+', 12);
+          drawMolecule(680, cy - 60, '#a78bfa', 'ATP', 18);
+        }
+        if (step >= 4) {
+          // NADPH production
+          drawMolecule(480, cy - 80, '#f472b6', 'NADPH', 20);
+        }
+
+        return;
+      } else if (type === 'calvin') {
+        // Calvin Cycle Diagram
+        ctx.strokeStyle = 'rgba(255,255,255,0.2)'; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.arc(cx, cy, 150, 0, Math.PI*2); ctx.stroke();
+        
+        ctx.fillStyle = 'white'; ctx.font = 'bold 24px sans-serif'; ctx.textAlign = 'center'; ctx.fillText("Calvin Cycle", cx, cy);
+
+        // Nodes
+        const fixX = cx; const fixY = cy - 150;
+        const redX = cx + 130; const redY = cy + 75;
+        const regX = cx - 130; const regY = cy + 75;
+
+        ctx.fillStyle = '#10b981'; ctx.beginPath(); ctx.arc(fixX, fixY, 20, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = 'white'; ctx.font = '14px sans-serif'; ctx.fillText("Fixation", fixX, fixY - 30);
+
+        ctx.fillStyle = '#f472b6'; ctx.beginPath(); ctx.arc(redX, redY, 20, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = 'white'; ctx.fillText("Reduction", redX + 40, redY);
+
+        ctx.fillStyle = '#3b82f6'; ctx.beginPath(); ctx.arc(regX, regY, 20, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = 'white'; ctx.fillText("Regeneration", regX - 50, regY);
+
+        if (step >= 0) {
+          drawMolecule(fixX - 80, fixY - 50, '#94a3b8', '3 CO2', 20);
+          drawMolecule(fixX + 80, fixY - 50, '#10b981', '3 RuBP', 20);
+          ctx.fillText("Rubisco enzyme combines them", cx, fixY + 30);
+        }
+        if (step >= 1) {
+          drawMolecule(redX + 80, redY - 40, '#a78bfa', '6 ATP', 20);
+          drawMolecule(redX + 80, redY + 40, '#f472b6', '6 NADPH', 20);
+          drawMolecule(cx + 80, cy, '#fbbf24', '6 3-PGA', 20);
+        }
+        if (step >= 2) {
+          drawMolecule(cx, cy + 200, '#f59e0b', '1 G3P (Glucose)', 25);
+          ctx.strokeStyle = 'white'; ctx.beginPath(); ctx.moveTo(redX - 20, redY + 20); ctx.lineTo(cx, cy + 170); ctx.stroke();
+        }
+        if (step >= 3) {
+          drawMolecule(cx - 80, cy, '#fbbf24', '5 G3P', 20);
+          drawMolecule(regX - 80, regY, '#a78bfa', '3 ATP', 20);
+        }
+
+        return;
+      } else if (type === 'resp') {
+        // Cell structure
+        ctx.fillStyle = '#1e293b'; ctx.fillRect(0, 0, w, h); // Cytoplasm
+        ctx.fillStyle = 'rgba(255,255,255,0.3)'; ctx.font = '20px sans-serif'; ctx.fillText("Cytoplasm", 100, 50);
+
+        // Mitochondrion
+        ctx.fillStyle = '#7c2d12';
+        ctx.beginPath(); ctx.ellipse(cx + 100, cy, 250, 150, 0, 0, Math.PI*2); ctx.fill();
+        ctx.strokeStyle = '#ea580c'; ctx.lineWidth = 4; ctx.stroke();
+        ctx.fillStyle = 'white'; ctx.font = 'bold 24px sans-serif'; ctx.fillText("Mitochondrion", cx + 100, cy - 100);
+
+        if (step >= 0) {
+          // Glycolysis
+          drawMolecule(100, cy, '#f59e0b', 'Glucose', 25);
+          ctx.strokeStyle = 'white'; ctx.beginPath(); ctx.moveTo(130, cy); ctx.lineTo(200, cy); ctx.stroke();
+          drawMolecule(230, cy, '#fbbf24', 'Pyruvate', 20);
+          drawMolecule(165, cy - 40, '#a78bfa', '2 ATP', 18);
+          ctx.fillText("Glycolysis", 165, cy + 30);
+        }
+        if (step >= 1) {
+          // Krebs Cycle
+          ctx.strokeStyle = 'rgba(255,255,255,0.2)'; ctx.lineWidth = 4;
+          ctx.beginPath(); ctx.arc(cx + 50, cy + 50, 40, 0, Math.PI*2); ctx.stroke();
+          ctx.fillText("Krebs Cycle", cx + 50, cy + 110);
+          
+          ctx.strokeStyle = 'white'; ctx.beginPath(); ctx.moveTo(250, cy); ctx.lineTo(cx + 20, cy + 30); ctx.stroke();
+          
+          drawMolecule(cx + 50, cy - 20, '#94a3b8', 'CO2', 15);
+          drawMolecule(cx - 10, cy + 50, '#a78bfa', '2 ATP', 18);
+          drawMolecule(cx + 110, cy + 50, '#f472b6', 'NADH/FADH2', 25);
+        }
+        if (step >= 2) {
+          // ETC
+          ctx.fillStyle = '#ea580c'; ctx.fillRect(cx + 200, cy - 80, 40, 160);
+          ctx.fillText("Electron Transport Chain", cx + 220, cy - 100);
+          
+          ctx.strokeStyle = 'white'; ctx.beginPath(); ctx.moveTo(cx + 140, cy + 50); ctx.lineTo(cx + 190, cy + 50); ctx.stroke();
+          
+          drawMolecule(cx + 220, cy + 120, '#67e8f9', 'O2', 18);
+          drawMolecule(cx + 280, cy + 120, '#3b82f6', 'H2O', 18);
+          ctx.strokeStyle = 'white'; ctx.beginPath(); ctx.moveTo(cx + 240, cy + 120); ctx.lineTo(cx + 260, cy + 120); ctx.stroke();
+
+          drawMolecule(cx + 300, cy, '#a78bfa', '32 ATP', 30);
+        }
+        return;
       }
     }
 
-    particlesRef.current.forEach(p => {
-      p.x += p.vx;
-      p.y += p.vy;
+    ctx.fillStyle = 'rgba(15, 23, 42, 1)'; // Solid background
+    ctx.fillRect(0, 0, w, h);
 
-      if (p.x < 20 || p.x > canvas.width - 20) p.vx *= -1;
-      if (p.y < 20 || p.y > canvas.height - 20) p.vy *= -1;
+    const cx = w / 2;
+    const cy = h / 2;
 
-      // Draw Highlight if targeted
-      if (mousePosRef.current) {
-        const dx = p.x - mousePosRef.current.x;
-        const dy = p.y - mousePosRef.current.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < p.size + 40) {
-          ctx.save();
+    // --- Draw Organelles based on process ---
+    if (type === 'photo') {
+      // Chloroplast
+      ctx.fillStyle = '#14532d';
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, 220, 140, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#22c55e';
+      ctx.lineWidth = 4;
+      ctx.stroke();
+
+      // Thylakoids
+      ctx.fillStyle = '#4ade80';
+      ctx.strokeStyle = '#166534';
+      ctx.lineWidth = 2;
+      for(let i=-2; i<=2; i++) {
+        for(let j=-2; j<=2; j++) {
           ctx.beginPath();
-          ctx.arc(p.x, p.y, p.size + 10, 0, Math.PI * 2);
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-          ctx.lineWidth = 2;
-          ctx.setLineDash([5, 5]);
+          ctx.ellipse(cx + i*50, cy + j*20, 20, 8, 0, 0, Math.PI * 2);
+          ctx.fill();
           ctx.stroke();
-          ctx.restore();
+        }
+      }
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.font = '24px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText("Chloroplast: Thylakoids", cx, cy + 180);
+    } else if (type === 'calvin') {
+      // Chloroplast Stroma
+      ctx.fillStyle = '#14532d';
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, 220, 140, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#22c55e';
+      ctx.lineWidth = 4;
+      ctx.stroke();
+
+      // Calvin Cycle Diagram
+      ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+      ctx.lineWidth = 15;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 70, 0, Math.PI * 2);
+      ctx.stroke();
+      
+      ctx.fillStyle = 'white';
+      ctx.font = 'bold 20px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText("Calvin Cycle", cx, cy + 5);
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.font = '24px sans-serif';
+      ctx.fillText("Chloroplast: Stroma", cx, cy + 180);
+    } else if (type === 'resp') {
+      // Mitochondrion
+      ctx.fillStyle = '#7c2d12';
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, 200, 120, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#ea580c';
+      ctx.lineWidth = 4;
+      ctx.stroke();
+
+      // Cristae
+      ctx.strokeStyle = '#ea580c';
+      ctx.lineWidth = 10;
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(cx - 160, cy);
+      for(let x = -120; x <= 120; x += 40) {
+        ctx.lineTo(cx + x, cy - 70);
+        ctx.lineTo(cx + x + 20, cy + 70);
+      }
+      ctx.lineTo(cx + 160, cy);
+      ctx.stroke();
+
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.font = '24px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText("Mitochondrion", cx, cy + 160);
+    }
+
+    particlesRef.current.forEach(p => {
+      if (p.isCaught) {
+        p.x += (cx - p.x) * 0.15;
+        p.y += (cy - p.y) * 0.15;
+        p.size *= 0.85;
+      } else {
+        p.x += p.vx;
+        p.y += p.vy;
+
+        if (p.label === 'Light') {
+          if (p.y > h + 50) p.y = -50;
+        } else if (p.label === 'H2O') {
+          if (p.y < -50) p.y = h + 50;
+        } else {
+          if (p.x < 20 || p.x > canvas.width - 20) p.vx *= -1;
+          if (p.y < 20 || p.y > canvas.height - 20) p.vy *= -1;
         }
       }
 
-      ctx.fillStyle = p.color;
-      ctx.shadowBlur = 10;
-      ctx.shadowColor = p.color;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-      
-      ctx.fillStyle = 'white';
-      ctx.font = `bold ${p.size * 0.6}px sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.fillText(p.label, p.x, p.y + p.size * 0.2);
-    });
+      if (p.size > 2) {
+        // Draw Highlight if targeted
+        if (mousePosRef.current && !p.isCaught) {
+          const dx = p.x - mousePosRef.current.x;
+          const dy = p.y - mousePosRef.current.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < p.size + 80) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size + 10, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+            ctx.lineWidth = 3;
+            ctx.setLineDash([5, 5]);
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
 
-    animationFrameRef.current = requestAnimationFrame(animateParticles);
+        ctx.fillStyle = p.color;
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        
+        ctx.fillStyle = 'white';
+        ctx.font = `bold ${p.size * 0.5}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(p.label, p.x, p.y);
+      }
+    });
   }, []);
 
   const handleModalMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = modalCanvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
     mousePosRef.current = {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top) * scaleY
     };
   };
 
@@ -701,20 +936,21 @@ export default function App() {
     const canvas = modalCanvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
 
     let closestIdx = -1;
     let minDistance = Infinity;
 
     particlesRef.current.forEach((p, idx) => {
+      if (p.isCaught) return;
       const dx = p.x - x;
       const dy = p.y - y;
       const distance = Math.sqrt(dx * dx + dy * dy);
       
-      // Very generous hit detection: radius + 40px padding
-      // Also prioritizes the closest particle to the click
-      if (distance < p.size + 40 && distance < minDistance) {
+      if (distance < p.size + 80 && distance < minDistance) {
         minDistance = distance;
         closestIdx = idx;
       }
@@ -724,35 +960,52 @@ export default function App() {
       const p = particlesRef.current[closestIdx];
       playSound('catch');
       setBuiltEquation(prev => [...prev, p.label]);
-      particlesRef.current.splice(closestIdx, 1);
+      p.isCaught = true;
     }
   };
 
   const startProcess = (mode: 'photo' | 'calvin' | 'resp') => {
     setActiveProcess(mode);
+    setProcessState('collecting');
+    setAnimationStep(0);
     setBuiltEquation([]);
     spawnParticles(mode);
-    setTimeout(() => {
-      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
-      animateParticles();
-    }, 100);
   };
+
+  useEffect(() => {
+    if (!activeProcess) {
+      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+      return;
+    }
+
+    let frameId: number;
+    const loop = () => {
+      animateParticles();
+      frameId = requestAnimationFrame(loop);
+    };
+    frameId = requestAnimationFrame(loop);
+    animationFrameRef.current = frameId;
+
+    return () => {
+      if (frameId) cancelAnimationFrame(frameId);
+    };
+  }, [activeProcess, animateParticles]);
 
   const submitEquation = () => {
     const eq = builtEquation.join(' ');
     let success = false;
     
     if (activeProcess === 'photo') {
-      // 6CO2 + 6H2O + Light -> Glucose + 6O2
+      // Light Reactions: 6 H2O + 6 CO2 + 1 Light -> ATP + NADPH + 6 O2
       const counts = builtEquation.reduce((acc, val) => {
         acc[val] = (acc[val] || 0) + 1;
         return acc;
       }, {} as Record<string, number>);
-      if (counts['CO2'] >= 6 && counts['H2O'] >= 6 && counts['Light'] >= 1) {
+      if (counts['H2O'] >= 6 && counts['CO2'] >= 6 && counts['Light'] >= 1) {
         success = true;
       }
     } else if (activeProcess === 'calvin') {
-      // 3CO2 + 9ATP + 6NADPH -> G3P (Simplified to Glucose for game)
+      // Calvin Cycle: 3 CO2 + 9 ATP + 6 NADPH -> 1 Glucose
       const counts = builtEquation.reduce((acc, val) => {
         acc[val] = (acc[val] || 0) + 1;
         return acc;
@@ -761,7 +1014,7 @@ export default function App() {
         success = true;
       }
     } else if (activeProcess === 'resp') {
-      // Glucose + 6O2 -> 6CO2 + 6H2O + Energy
+      // Respiration: 1 Glucose + 6 O2 -> 6 CO2 + 6 H2O + Energy
       const counts = builtEquation.reduce((acc, val) => {
         acc[val] = (acc[val] || 0) + 1;
         return acc;
@@ -773,37 +1026,72 @@ export default function App() {
 
     if (success) {
       playSound(activeProcess!);
-      setGameState(prev => {
-        let healthGain = 0.5;
-        let glucoseGain = 0;
-        
-        if (activeProcess === 'photo') {
-          healthGain = 1.0;
-          // Photosynthesis (Light Reaction) produces intermediates, not glucose directly in this sim
-          // but user said "glucose is only made when photosynthesis is done"
-          // We'll interpret "Photosynthesis" as the whole process or just the light part.
-          // Let's make Calvin Cycle produce the glucose, but it requires Photo to be done.
-        } else if (activeProcess === 'calvin') {
-          glucoseGain = 25;
-          healthGain = 1.5;
-        } else if (activeProcess === 'resp') {
-          healthGain = 2.0;
-        }
+      
+      // Show specific toast based on process
+      if (activeProcess === 'photo') {
+        toast.success("Light Reactions Complete! ATP and NADPH produced.");
+      } else if (activeProcess === 'calvin') {
+        toast.success("Calvin Cycle Complete! Glucose produced.");
+      } else if (activeProcess === 'resp') {
+        toast.success("Cellular Respiration Complete! Energy released.");
+      }
 
-        return {
-          ...prev,
-          health: parseFloat(Math.min(100, prev.health + healthGain).toFixed(1)),
-          glucose: prev.glucose + glucoseGain,
-          photoDoneToday: activeProcess === 'photo' ? true : prev.photoDoneToday,
-          calvinDoneToday: activeProcess === 'calvin' ? true : prev.calvinDoneToday,
-          respDoneToday: activeProcess === 'resp' ? true : prev.respDoneToday,
-        };
-      });
-      toast.success(`${activeProcess?.toUpperCase()} Successful!`);
-      setActiveProcess(null);
+      setProcessState('animating');
     } else {
       toast.error("Equation incomplete or incorrect!");
     }
+  };
+
+  const getAnimationSteps = (process: 'photo' | 'calvin' | 'resp') => {
+    if (process === 'photo') {
+      return [
+        "Step 1: Light energy hits Photosystem II in the Thylakoid membrane.",
+        "Step 2: Water (H2O) is split into Oxygen (O2), Protons (H+), and Electrons (e-).",
+        "Step 3: Electrons travel through the Electron Transport Chain, pumping Protons into the lumen.",
+        "Step 4: Protons flow through ATP Synthase, generating ATP.",
+        "Step 5: Electrons reach Photosystem I and are used to reduce NADP+ to NADPH."
+      ];
+    } else if (process === 'calvin') {
+      return [
+        "Step 1: Carbon Fixation - 3 CO2 molecules combine with 3 RuBP molecules using the enzyme Rubisco.",
+        "Step 2: Reduction - 6 ATP and 6 NADPH are used to convert the molecules into 6 G3P.",
+        "Step 3: Release - 1 G3P molecule exits the cycle to be used for making Glucose.",
+        "Step 4: Regeneration - The remaining 5 G3P molecules use 3 ATP to regenerate 3 RuBP molecules."
+      ];
+    } else {
+      return [
+        "Step 1: Glycolysis - Glucose is broken down in the cytoplasm into Pyruvate, producing 2 ATP.",
+        "Step 2: Krebs Cycle - Pyruvate enters the mitochondrion, releasing CO2 and producing 2 ATP, NADH, and FADH2.",
+        "Step 3: Electron Transport Chain - NADH and FADH2 donate electrons. Oxygen acts as the final electron acceptor, combining with protons to form Water (H2O). This powers ATP Synthase to produce ~32 ATP."
+      ];
+    }
+  };
+
+  const finishProcess = () => {
+    setGameState(prev => {
+      let healthGain = 0.5;
+      let glucoseGain = 0;
+      
+      if (activeProcess === 'photo') {
+        healthGain = 1.0;
+      } else if (activeProcess === 'calvin') {
+        glucoseGain = 25;
+        healthGain = 1.5;
+      } else if (activeProcess === 'resp') {
+        healthGain = 2.0;
+      }
+
+      return {
+        ...prev,
+        health: parseFloat(Math.min(100, prev.health + healthGain).toFixed(1)),
+        glucose: prev.glucose + glucoseGain,
+        photoDoneToday: activeProcess === 'photo' ? true : prev.photoDoneToday,
+        calvinDoneToday: activeProcess === 'calvin' ? true : prev.calvinDoneToday,
+        respDoneToday: activeProcess === 'resp' ? true : prev.respDoneToday,
+      };
+    });
+    setActiveProcess(null);
+    setProcessState('collecting');
   };
 
   // --- Actions ---
@@ -993,7 +1281,7 @@ export default function App() {
         </aside>
 
         {/* Main Simulation Area */}
-        <main className="flex-1 relative bg-slate-950 flex flex-col">
+        <main className="flex-1 relative bg-slate-950 flex flex-col overflow-y-auto">
           <header className="absolute top-0 left-0 right-0 p-6 z-10 flex justify-between items-start pointer-events-none">
             <div className="bg-slate-900/80 backdrop-blur-md p-4 rounded-2xl border border-slate-800 pointer-events-auto">
               <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Daily Checklist</h3>
@@ -1154,34 +1442,62 @@ export default function App() {
                   </div>
 
                   <div className="flex flex-col gap-3">
-                    <div className="flex gap-3">
-                      <button 
-                        onClick={() => setBuiltEquation([])}
-                        className="px-6 py-4 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl transition-all"
-                      >
-                        CLEAR
-                      </button>
-                      <button 
-                        onClick={submitEquation}
-                        className="flex-1 py-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-xl transition-all shadow-lg shadow-emerald-500/20"
-                      >
-                        ACTIVATE PROCESS
-                      </button>
-                    </div>
-                    <button 
-                      onClick={() => {
-                        setGameState(prev => ({
-                          ...prev,
-                          health: parseFloat(Math.max(0, prev.health - 15).toFixed(1)),
-                          [activeProcess === 'photo' ? 'photoDoneToday' : activeProcess === 'calvin' ? 'calvinDoneToday' : 'respDoneToday']: true
-                        }));
-                        setActiveProcess(null);
-                        toast.success("Process skipped at health cost.");
-                      }}
-                      className="w-full py-3 bg-amber-600/10 hover:bg-amber-600/20 text-amber-400 font-bold rounded-xl border border-amber-500/20 transition-all text-sm"
-                    >
-                      FAST-TRACK PROCESS ( -15 HEALTH )
-                    </button>
+                    {processState === 'collecting' ? (
+                      <>
+                        <div className="flex gap-3">
+                          <button 
+                            onClick={() => setBuiltEquation(prev => prev.slice(0, -1))}
+                            className="px-6 py-4 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl transition-all"
+                          >
+                            UNDO
+                          </button>
+                          <button 
+                            onClick={submitEquation}
+                            className="flex-1 py-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-xl transition-all shadow-lg shadow-emerald-500/20"
+                          >
+                            ACTIVATE PROCESS
+                          </button>
+                        </div>
+                        <button 
+                          onClick={() => {
+                            setGameState(prev => ({
+                              ...prev,
+                              health: parseFloat(Math.max(0, prev.health - 15).toFixed(1)),
+                              [activeProcess === 'photo' ? 'photoDoneToday' : activeProcess === 'calvin' ? 'calvinDoneToday' : 'respDoneToday']: true
+                            }));
+                            setActiveProcess(null);
+                            toast.success("Process skipped at health cost.");
+                          }}
+                          className="w-full py-3 bg-amber-600/10 hover:bg-amber-600/20 text-amber-400 font-bold rounded-xl border border-amber-500/20 transition-all text-sm"
+                        >
+                          FAST-TRACK PROCESS ( -15 HEALTH )
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <div className="bg-slate-800 border border-slate-700 p-4 rounded-xl text-slate-200 text-sm">
+                          <h4 className="font-bold text-emerald-400 mb-2">Animation Step {animationStep + 1} of {getAnimationSteps(activeProcess!).length}</h4>
+                          <p>{getAnimationSteps(activeProcess!)[animationStep]}</p>
+                        </div>
+                        <div className="flex gap-3">
+                          {animationStep < getAnimationSteps(activeProcess!).length - 1 ? (
+                            <button 
+                              onClick={() => setAnimationStep(prev => prev + 1)}
+                              className="w-full py-4 bg-blue-500 hover:bg-blue-400 text-white font-bold rounded-xl transition-all shadow-lg shadow-blue-500/20"
+                            >
+                              NEXT STEP
+                            </button>
+                          ) : (
+                            <button 
+                              onClick={finishProcess}
+                              className="w-full py-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-xl transition-all shadow-lg shadow-emerald-500/20"
+                            >
+                              COLLECT REWARD & CLOSE
+                            </button>
+                          )}
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>

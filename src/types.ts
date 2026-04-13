@@ -16,6 +16,7 @@ export interface GameState {
   calvinDoneToday: boolean;
   respDoneToday: boolean;
   weather: 'Sunny' | 'Cloudy' | 'Rainy';
+  growthPoints: number; // Progress towards next stage
   // Resource tracking for particles
   waterConsumed: number;
   lightConsumed: number;
@@ -31,4 +32,5 @@ export interface Particle {
   label: string;
   color: string;
   size: number;
+  isCaught?: boolean;
 }
