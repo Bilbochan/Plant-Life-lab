@@ -1,4 +1,17 @@
-export type GrowthStage = 'Seed' | 'Sprout' | 'Seedling' | 'Vegetative' | 'Flowering' | 'Fruit';
+export type GrowthStage = 
+  | 'Dormant' 
+  | 'Silver Tip' 
+  | 'Green Tip' 
+  | 'Half-inch Green' 
+  | 'Tight Cluster' 
+  | 'First Pink' 
+  | 'First Bloom' 
+  | 'Full Bloom' 
+  | 'Petal Fall' 
+  | 'Fruit Set' 
+  | 'Cell Division' 
+  | 'Cell Enlargement' 
+  | 'Maturation';
 
 export interface GameState {
   day: number;
