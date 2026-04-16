@@ -22,7 +22,13 @@ import {
   CheckCircle2,
   AlertTriangle,
   Music,
-  Music2
+  Music2,
+  RotateCcw,
+  ChevronRight,
+  AlertCircle,
+  ArrowRight,
+  Check,
+  MousePointer2
 } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
 import { GameState, GrowthStage, Particle } from './types';
@@ -99,7 +105,7 @@ const playSound = (type: 'water' | 'photo' | 'calvin' | 'resp' | 'death' | 'catc
 const INITIAL_STATE: GameState = {
   day: 1,
   health: 100.0,
-  stage: 'Dormant',
+  stage: 'Seed',
   glucose: 30,
   waterLevel: 50,
   isDayTime: true,
@@ -113,6 +119,8 @@ const INITIAL_STATE: GameState = {
   respDoneToday: false,
   weather: 'Sunny',
   growthPoints: 0,
+  windSpeed: 10,
+  treeSeed: Math.floor(Math.random() * 1000000),
   waterConsumed: 0,
   lightConsumed: 0,
   co2Consumed: 0,
@@ -127,6 +135,7 @@ export default function App() {
   });
   const [showTutorial, setShowTutorial] = useState(false);
   const [gameState, setGameState] = useState<GameState>(INITIAL_STATE);
+
   const [activeProcess, setActiveProcess] = useState<'photo' | 'calvin' | 'resp' | null>(null);
   const [processState, setProcessState] = useState<'collecting' | 'animating'>('collecting');
   const [animationStep, setAnimationStep] = useState(0);
@@ -151,8 +160,10 @@ export default function App() {
 
   const [isWatering, setIsWatering] = useState(false);
   const [isMusicEnabled, setIsMusicEnabled] = useState(false);
+  const [history, setHistory] = useState<GameState[]>([]);
   const audioContextRef = useRef<AudioContext | null>(null);
   const musicNodesRef = useRef<{ osc: OscillatorNode; gain: GainNode }[]>([]);
+  const rainNodeRef = useRef<{ osc: OscillatorNode; gain: GainNode } | null>(null);
 
   const toggleMusic = () => {
     if (!isMusicEnabled) {
@@ -161,6 +172,68 @@ export default function App() {
       stopMusic();
     }
     setIsMusicEnabled(!isMusicEnabled);
+  };
+
+  const startRainSound = () => {
+    if (!audioContextRef.current) {
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    const ctx = audioContextRef.current;
+    if (ctx.state === 'suspended') ctx.resume();
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(50, ctx.currentTime);
+    
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(1000, ctx.currentTime);
+    
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    
+    gain.gain.setValueAtTime(0, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.03, ctx.currentTime + 1);
+    
+    osc.start();
+    rainNodeRef.current = { osc, gain };
+  };
+
+  const stopRainSound = () => {
+    if (rainNodeRef.current && audioContextRef.current) {
+      const { osc, gain } = rainNodeRef.current;
+      gain.gain.linearRampToValueAtTime(0, audioContextRef.current.currentTime + 1);
+      setTimeout(() => {
+        try { osc.stop(); } catch (e) {}
+      }, 1000);
+      rainNodeRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    if (gameState.weather === 'Rainy' && isMusicEnabled) {
+      startRainSound();
+    } else {
+      stopRainSound();
+    }
+  }, [gameState.weather, isMusicEnabled]);
+
+  const handleUndo = () => {
+    if (history.length > 0) {
+      const lastState = history[history.length - 1];
+      setGameState(lastState);
+      setHistory(prev => prev.slice(0, -1));
+      toast.info("Action undone!", { icon: '↩️' });
+    } else {
+      toast.info("No more actions to undo.");
+    }
+  };
+
+  const saveHistory = (state: GameState) => {
+    setHistory(prev => [...prev.slice(-19), state]); // Keep last 20 states
   };
 
   const startMusic = () => {
@@ -244,6 +317,7 @@ export default function App() {
 
   const updateEnvironment = useCallback(() => {
     setGameState(prev => {
+      saveHistory(prev);
       const isNewDay = !prev.isDayTime;
       let nextDay = prev.day;
       let nextWeather = prev.weather;
@@ -262,6 +336,12 @@ export default function App() {
         if (rand < 0.6) nextWeather = 'Sunny';
         else if (rand < 0.9) nextWeather = 'Cloudy';
         else nextWeather = 'Rainy';
+
+        // Wind speed
+        let nextWind = 5 + Math.random() * 20;
+        if (nextWeather === 'Rainy') nextWind += 30;
+        if (nextWeather === 'Cloudy') nextWind += 10;
+        if (Math.random() < 0.2) nextWind += 40; // Windy day
 
         // Sunlight intensity based on weather
         if (nextWeather === 'Sunny') nextSunlight = 80 + Math.random() * 20;
@@ -346,6 +426,8 @@ export default function App() {
           calvinDoneToday: false,
           respDoneToday: false,
           growthPoints: prev.growthPoints + growthGain,
+          windSpeed: nextWind,
+          treeSeed: prev.treeSeed,
           stage: nextStage
         };
 
@@ -367,19 +449,14 @@ export default function App() {
   };
 
   const getStage = (day: number): GrowthStage => {
-    if (day < 5) return 'Dormant';
-    if (day < 10) return 'Silver Tip';
-    if (day < 15) return 'Green Tip';
-    if (day < 20) return 'Half-inch Green';
-    if (day < 25) return 'Tight Cluster';
-    if (day < 30) return 'First Pink';
-    if (day < 35) return 'First Bloom';
-    if (day < 40) return 'Full Bloom';
-    if (day < 45) return 'Petal Fall';
-    if (day < 50) return 'Fruit Set';
-    if (day < 55) return 'Cell Division';
-    if (day < 60) return 'Cell Enlargement';
-    return 'Maturation';
+    if (day < 3) return 'Seed';
+    if (day < 7) return 'Sprout';
+    if (day < 12) return 'Bigger Sprout';
+    if (day < 20) return 'Sapling';
+    if (day < 30) return 'Small Tree';
+    if (day < 45) return 'Mature Tree';
+    if (day < 55) return 'Flowering Tree';
+    return 'Fruiting Tree';
   };
 
   useEffect(() => {
@@ -516,212 +593,203 @@ export default function App() {
     }
 
     // Ground
-    ctx.fillStyle = '#451a03';
+    ctx.fillStyle = '#78350f'; // Slightly lighter brown for ground
     ctx.fillRect(0, groundY, w, 60);
+
+    // Roots
+    const drawRoots = (rx: number, ry: number, seed: number) => {
+      ctx.strokeStyle = '#451a03';
+      ctx.lineWidth = 4;
+      for (let i = 0; i < 5; i++) {
+        const angle = (Math.PI / 6) + (i * Math.PI / 6);
+        const length = 20 + (Math.sin(seed + i) * 10);
+        ctx.beginPath();
+        ctx.moveTo(rx, ry);
+        ctx.lineTo(rx + Math.cos(angle) * length, ry + Math.sin(angle) * length);
+        ctx.stroke();
+      }
+    };
 
     // Plant
     const cx = w / 2;
-    const isWilted = health < 40;
+    const isWilted = health < 20; // Only very low health turns leaves brown
     const time = Date.now() / 1000;
-    const sway = Math.sin(time) * (isWilted ? 2 : 5);
+    
+    // Wind effect based on windSpeed
+    const windEffect = (gameState.windSpeed / 100) * 15;
+    const sway = Math.sin(time * 2) * (windEffect + (isWilted ? 1 : 2));
     
     const plantColor = isWilted ? '#713f12' : '#166534';
     const leafColor = isWilted ? '#451a03' : '#15803d';
-    const leafHighlight = isWilted ? '#713f12' : '#22c55e';
+    const trunkColor = isWilted ? '#451a03' : '#5c2d10';
+    const flowerColor = '#fdf2f8'; // Light pink
+    const fruitColor = '#ef4444'; // Red apple
+    const breathing = Math.sin(time * 2) * 0.05 + 1; // Subtle pulse
 
-    // Growth factor based on growthPoints for "step by step" change
-    const height = Math.min(400, 40 + (gameState.growthPoints * 1.8)); 
-    
-    // Apple tree characteristics
-    const isWoody = gameState.day >= 5; // Dormant stage and up are woody
-    const trunkColor = isWoody ? (isWilted ? '#451a03' : '#78350f') : plantColor;
-    
-    // Stem with gradient and highlights
-    const stemGrad = ctx.createLinearGradient(cx - 10, groundY, cx + 10, groundY);
-    stemGrad.addColorStop(0, isWilted ? '#290f02' : (isWoody ? '#451a03' : '#064e3b'));
-    stemGrad.addColorStop(0.5, trunkColor);
-    stemGrad.addColorStop(1, isWilted ? '#290f02' : (isWoody ? '#451a03' : '#064e3b'));
-    
-    ctx.strokeStyle = stemGrad;
-    // Stem thickness grows with points
-    ctx.lineWidth = Math.min(25, 6 + (gameState.growthPoints / 12));
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    
-    ctx.beginPath();
-    ctx.moveTo(cx, groundY);
-    const curveOffset = isWilted ? 40 : 15;
-    const swayAmount = sway * (height / 100); 
-    ctx.bezierCurveTo(
-      cx - curveOffset + swayAmount * 0.3, groundY - height / 3,
-      cx + curveOffset + swayAmount * 0.6, groundY - (height * 2) / 3,
-      cx + swayAmount, groundY - height
-    );
-    ctx.stroke();
-
-    // Stem Highlight
-    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-    ctx.lineWidth = ctx.lineWidth / 3;
-    ctx.beginPath();
-    ctx.moveTo(cx + 2, groundY);
-    ctx.bezierCurveTo(
-      cx - curveOffset + swayAmount * 0.3 + 2, groundY - height / 3,
-      cx + curveOffset + swayAmount * 0.6 + 2, groundY - (height * 2) / 3,
-      cx + swayAmount + 2, groundY - height
-    );
-    ctx.stroke();
-
-    // Helper to get position on stem
-    const getStemPos = (t: number) => {
-      const invT = 1 - t;
-      const x = invT * invT * invT * cx + 
-                3 * invT * invT * t * (cx - curveOffset + swayAmount * 0.3) + 
-                3 * invT * t * t * (cx + curveOffset + swayAmount * 0.6) + 
-                t * t * t * (cx + swayAmount);
-      const y = invT * invT * invT * groundY + 
-                3 * invT * invT * t * (groundY - height / 3) + 
-                3 * invT * t * t * (groundY - (height * 2) / 3) + 
-                t * t * t * (groundY - height);
-      return { x, y };
+    // Seeded random for consistent placements (avoids flickering)
+    const seededRandom = (x: number) => {
+      const h = Math.sin(x + gameState.treeSeed) * 10000;
+      return h - Math.floor(h);
     };
 
-    // Draw Buds / Leaves / Flowers / Fruit based on stage
-    const drawBud = (x: number, y: number, rotation: number, scale: number) => {
+    const drawLeaf = (lx: number, ly: number, angle: number, size: number) => {
       ctx.save();
-      ctx.translate(x, y);
-      ctx.rotate(rotation);
-      ctx.scale(scale, scale);
-      
-      if (stage === 'Dormant') {
-        ctx.fillStyle = '#451a03'; // Brown tight buds
-        ctx.beginPath();
-        ctx.ellipse(0, 0, 6, 4, 0, 0, Math.PI * 2);
-        ctx.fill();
-      } else if (stage === 'Silver Tip') {
-        ctx.fillStyle = '#94a3b8'; // Light gray tissue
-        ctx.beginPath();
-        ctx.ellipse(0, 0, 7, 5, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = '#451a03';
-        ctx.lineWidth = 1;
-        ctx.stroke();
-      } else if (stage === 'Green Tip') {
-        ctx.fillStyle = '#22c55e'; // Green tissue
-        ctx.beginPath();
-        ctx.ellipse(0, 0, 8, 6, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = '#94a3b8';
-        ctx.beginPath();
-        ctx.ellipse(-2, 0, 4, 3, 0, 0, Math.PI * 2);
-        ctx.fill();
-      } else if (stage === 'Half-inch Green' || stage === 'Tight Cluster' || stage === 'First Pink' || stage === 'First Bloom' || stage === 'Full Bloom' || stage === 'Petal Fall' || stage === 'Fruit Set' || stage === 'Cell Division' || stage === 'Cell Enlargement' || stage === 'Maturation') {
-        // Draw Leaves
-        const leafSize = Math.min(50, 15 + (gameState.growthPoints / 4));
-        const leafGrad = ctx.createRadialGradient(0, 0, leafSize * 0.2, 0, 0, leafSize);
-        leafGrad.addColorStop(0, leafHighlight);
-        leafGrad.addColorStop(1, leafColor);
-        ctx.fillStyle = leafGrad;
-        
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.quadraticCurveTo(leafSize * 0.4, -leafSize * 0.4, leafSize, 0);
-        ctx.quadraticCurveTo(leafSize * 0.4, leafSize * 0.4, 0, 0);
-        ctx.fill();
-        
-        // Vein
-        ctx.strokeStyle = 'rgba(0,0,0,0.2)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.lineTo(leafSize * 0.8, 0);
-        ctx.stroke();
-
-        // Draw Flowers / Fruit on top of leaves if applicable
-        if (stage === 'Tight Cluster') {
-          ctx.fillStyle = '#166534'; // Green grouped buds
-          for(let i=0; i<3; i++) {
-            ctx.beginPath();
-            ctx.arc(5 + i*4, -2, 3, 0, Math.PI*2);
-            ctx.fill();
-          }
-        } else if (stage === 'First Pink') {
-          ctx.fillStyle = '#f472b6'; // Pink buds
-          for(let i=0; i<3; i++) {
-            ctx.beginPath();
-            ctx.arc(5 + i*5, -3, 4, 0, Math.PI*2);
-            ctx.fill();
-          }
-        } else if (stage === 'First Bloom' || stage === 'Full Bloom') {
-          const isKing = stage === 'First Bloom';
-          const flowerCount = isKing ? 1 : 3;
-          ctx.fillStyle = '#ffffff';
-          for(let i=0; i<flowerCount; i++) {
-            ctx.save();
-            ctx.translate(10 + i*8, -5);
-            for(let p=0; p<5; p++) {
-              ctx.rotate(Math.PI*2/5);
-              ctx.beginPath();
-              ctx.ellipse(6, 0, 5, 3, 0, 0, Math.PI*2);
-              ctx.fill();
-            }
-            ctx.fillStyle = '#facc15';
-            ctx.beginPath();
-            ctx.arc(0, 0, 3, 0, Math.PI*2);
-            ctx.fill();
-            ctx.fillStyle = '#ffffff';
-            ctx.restore();
-          }
-        } else if (stage === 'Petal Fall') {
-          ctx.fillStyle = '#facc15'; // Only centers left
-          ctx.beginPath();
-          ctx.arc(10, -5, 4, 0, Math.PI*2);
-          ctx.fill();
-        } else if (stage === 'Fruit Set' || stage === 'Cell Division' || stage === 'Cell Enlargement' || stage === 'Maturation') {
-          const fruitSize = stage === 'Fruit Set' ? 4 : (stage === 'Cell Division' ? 8 : (stage === 'Cell Enlargement' ? 15 : 25));
-          const fruitColor = stage === 'Maturation' ? '#ef4444' : '#4ade80';
-          
-          ctx.strokeStyle = '#3f6212';
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.moveTo(0, 0);
-          ctx.lineTo(5, 10);
-          ctx.stroke();
-          
-          const fruitGrad = ctx.createRadialGradient(5, 10, fruitSize * 0.2, 5, 10, fruitSize);
-          fruitGrad.addColorStop(0, stage === 'Maturation' ? '#f87171' : '#86efac');
-          fruitGrad.addColorStop(1, fruitColor);
-          ctx.fillStyle = fruitGrad;
-          ctx.beginPath();
-          ctx.arc(5, 10, fruitSize, 0, Math.PI*2);
-          ctx.fill();
-        }
-      }
-      
+      ctx.translate(lx, ly);
+      ctx.rotate(angle);
+      ctx.scale(breathing, breathing);
+      ctx.fillStyle = leafColor;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(size * 0.5, -size * 0.5, size, 0);
+      ctx.quadraticCurveTo(size * 0.5, size * 0.5, 0, 0);
+      ctx.fill();
       ctx.restore();
     };
 
-    const nodeCount = Math.min(24, 4 + Math.floor(gameState.growthPoints / 6));
-    for (let i = 0; i < nodeCount; i++) {
-      const t = (i + 1) / (nodeCount + 1);
-      const pos = getStemPos(t);
-      const rotation = (i % 2 === 0 ? 0.6 : -0.6) + (isWilted ? 0.5 : 0) + (sway * 0.02);
-      drawBud(pos.x, pos.y, rotation, 1);
+    const drawFlower = (fx: number, fy: number, scale: number) => {
+      ctx.save();
+      ctx.translate(fx, fy);
+      ctx.scale(scale * breathing, scale * breathing);
+      ctx.fillStyle = flowerColor;
+      for (let i = 0; i < 5; i++) {
+        ctx.rotate((Math.PI * 2) / 5);
+        ctx.beginPath();
+        ctx.ellipse(8, 0, 8, 5, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = '#facc15'; // Center
+      ctx.beginPath();
+      ctx.arc(0, 0, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    };
+
+    const drawFruit = (fx: number, fy: number, scale: number) => {
+      ctx.save();
+      ctx.translate(fx, fy);
+      ctx.scale(scale * breathing, scale * breathing);
+      // Stem
+      ctx.strokeStyle = '#451a03';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(0, -10);
+      ctx.stroke();
+      // Apple body
+      ctx.fillStyle = fruitColor;
+      ctx.beginPath();
+      ctx.arc(0, 5, 10, 0, Math.PI * 2);
+      ctx.fill();
+      // Highlight
+      ctx.fillStyle = 'rgba(255,255,255,0.3)';
+      ctx.beginPath();
+      ctx.arc(-3, 2, 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    };
+
+    const drawBranch = (bx: number, by: number, angle: number, length: number, thickness: number, depth: number, branchId: number) => {
+      if (depth <= 0) {
+        // Draw leaves at the end of branches
+        if (stage !== 'Seed' && stage !== 'Sprout') {
+          drawLeaf(bx, by, angle - 0.5, 18);
+          drawLeaf(bx, by, angle + 0.5, 18);
+          drawLeaf(bx, by, angle + 0.1, 15);
+          
+          const randF = seededRandom(branchId * 100);
+          if (stage === 'Flowering Tree' && randF > 0.6) drawFlower(bx, by, 0.7);
+          const randAp = seededRandom(branchId * 200);
+          if (stage === 'Fruiting Tree' && randAp > 0.7) drawFruit(bx, by, 0.8);
+        }
+        return;
+      }
+
+      const endX = bx + Math.cos(angle) * length;
+      const endY = by + Math.sin(angle) * length;
+
+      ctx.strokeStyle = trunkColor;
+      ctx.lineWidth = thickness;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(bx, by);
+      ctx.lineTo(endX, endY);
+      ctx.stroke();
+
+      // Recursive branching
+      const subBranches = depth > 1 ? 3 : 2; // More branches for more density
+      for (let i = 0; i < subBranches; i++) {
+        const offset = (i - (subBranches - 1) / 2) * 0.6;
+        const newAngle = angle + offset + (sway * 0.01 * (5 - depth));
+        const newLength = length * (0.65 + seededRandom(branchId + i) * 0.2);
+        const newThickness = thickness * 0.65;
+        drawBranch(endX, endY, newAngle, newLength, newThickness, depth - 1, branchId * 10 + i);
+      }
+
+      // Add leaves along the branch
+      const leafRand = seededRandom(branchId * 50);
+      if (depth > 0 && (stage === 'Mature Tree' || stage === 'Flowering Tree' || stage === 'Fruiting Tree')) {
+        if (leafRand > 0.3) drawLeaf(endX, endY, angle + 1, 14);
+        if (leafRand > 0.6) drawLeaf(bx + (endX - bx) * 0.5, by + (endY - by) * 0.5, angle - 1, 12);
+      }
+    };
+
+    if (stage === 'Seed') {
+      ctx.fillStyle = '#290f02';
+      ctx.save();
+      ctx.translate(cx, groundY - 6);
+      ctx.scale(breathing, breathing);
+      ctx.beginPath();
+      ctx.moveTo(0, -6);
+      ctx.quadraticCurveTo(6, 4, 0, 6);
+      ctx.quadraticCurveTo(-6, 4, 0, -6);
+      ctx.fill();
+      ctx.restore();
+    } else if (stage === 'Sprout') {
+      drawRoots(cx, groundY, gameState.treeSeed);
+      ctx.strokeStyle = '#22c55e';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(cx, groundY);
+      ctx.quadraticCurveTo(cx + sway, groundY - 15, cx + sway * 1.5, groundY - 30);
+      ctx.stroke();
+      drawLeaf(cx + sway * 1.5, groundY - 30, -Math.PI / 4, 12);
+      drawLeaf(cx + sway * 1.5, groundY - 30, -Math.PI / 2, 12);
+      drawLeaf(cx + sway * 1.5, groundY - 30, -3 * Math.PI / 4, 12);
+    } else if (stage === 'Bigger Sprout') {
+      drawRoots(cx, groundY, gameState.treeSeed);
+      ctx.strokeStyle = '#22c55e';
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.moveTo(cx, groundY);
+      ctx.quadraticCurveTo(cx + sway, groundY - 25, cx + sway * 1.5, groundY - 50);
+      ctx.stroke();
+      drawLeaf(cx + sway * 1.5, groundY - 50, -Math.PI / 4, 18);
+      drawLeaf(cx + sway * 1.5, groundY - 50, -3 * Math.PI / 4, 18);
+      drawLeaf(cx + sway * 0.8, groundY - 30, -Math.PI / 6, 15);
+      drawLeaf(cx + sway * 0.8, groundY - 30, -5 * Math.PI / 6, 15);
+    } else if (stage === 'Sapling') {
+      drawRoots(cx, groundY, gameState.treeSeed);
+      drawBranch(cx, groundY, -Math.PI / 2, 40, 10, 2, 1);
+    } else if (stage === 'Small Tree') {
+      drawRoots(cx, groundY, gameState.treeSeed);
+      drawBranch(cx, groundY, -Math.PI / 2, 55, 14, 3, 1);
+    } else if (stage === 'Mature Tree' || stage === 'Flowering Tree' || stage === 'Fruiting Tree') {
+      drawRoots(cx, groundY, gameState.treeSeed);
+      drawBranch(cx, groundY, -Math.PI / 2, 70, 20, 4, 1);
     }
 
-    // Top bud
-    const topPos = getStemPos(1);
-    drawBud(topPos.x, topPos.y, sway * 0.05, 1.2);
-
     // Pests (only if sprouted)
-    if (gameState.pestInfestation > 0) {
+    if (gameState.pestInfestation > 0 && stage !== 'Seed') {
       ctx.fillStyle = '#1c1917';
       for (let i = 0; i < Math.floor(gameState.pestInfestation / 5); i++) {
         ctx.beginPath();
-        ctx.arc(cx + (Math.random() - 0.5) * 100, groundY - Math.random() * height, 4, 0, Math.PI * 2);
+        const randX = seededRandom(i * 333);
+        const randY = seededRandom(i * 666);
+        ctx.arc(cx + (randX - 0.5) * 150, groundY - randY * 200, 4, 0, Math.PI * 2);
         ctx.fill();
       }
     }
-  }, [gameState, isWatering]);
+  }, [gameState, gameStarted, isWatering]);
 
   useEffect(() => {
     let frameId: number;
@@ -1529,6 +1597,7 @@ export default function App() {
       toast.info("Soil is already saturated!");
       return;
     }
+    saveHistory(gameState);
     setIsWatering(true);
     setTimeout(() => setIsWatering(false), 2000);
     
@@ -1546,6 +1615,7 @@ export default function App() {
       toast.info("No pests detected!");
       return;
     }
+    saveHistory(gameState);
     setGameState(prev => ({
       ...prev,
       pestInfestation: 0,
@@ -1698,6 +1768,19 @@ export default function App() {
                 PEST SPRAY
               </button>
               <button 
+                onClick={handleUndo}
+                disabled={history.length === 0}
+                className={cn(
+                  "flex items-center gap-3 p-3 border rounded-xl transition-colors font-bold text-sm",
+                  history.length > 0 
+                    ? "bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700" 
+                    : "bg-slate-900 border-slate-800 text-slate-600 cursor-not-allowed"
+                )}
+              >
+                <RotateCcw className="w-5 h-5" />
+                UNDO ACTION
+              </button>
+              <button 
                 onClick={toggleMusic}
                 className={cn(
                   "flex items-center gap-3 p-3 border rounded-xl transition-colors font-bold text-sm",
@@ -1833,114 +1916,141 @@ export default function App() {
             <motion.div 
               initial={{ scale: 0.9, y: 20 }}
               animate={{ scale: 1, y: 0 }}
-              className="bg-slate-900 w-full max-w-3xl rounded-[2rem] border border-slate-800 overflow-hidden shadow-2xl"
+              className="bg-slate-900 w-full max-w-6xl rounded-[2rem] border border-slate-800 overflow-hidden shadow-2xl"
             >
               <div className="p-6 border-b border-slate-800 flex justify-between items-center">
                 <div>
                   <h2 className="text-2xl font-black italic uppercase tracking-tighter text-emerald-400">
-                    {activeProcess === 'photo' ? 'Photosynthesis' : activeProcess === 'calvin' ? 'Calvin Cycle' : 'Cellular Respiration'}
+                    {activeProcess === 'photo' ? 'Photosynthesis Lab' : activeProcess === 'calvin' ? 'Calvin Cycle Lab' : 'Respiration Lab'}
                   </h2>
                   <p className="text-xs text-slate-500 font-bold uppercase tracking-widest">
-                    {processState === 'collecting' ? 'Phase 1: Collect Required Molecules' : 'Phase 2: Process Animation'}
+                    {processState === 'collecting' ? 'Phase 1: Molecule Collection' : 'Phase 2: Scientific Animation'}
                   </p>
                 </div>
                 <button 
                   onClick={() => setActiveProcess(null)}
-                  className="p-2 hover:bg-slate-800 rounded-full transition-colors"
+                  className="p-3 hover:bg-slate-800 text-slate-400 rounded-xl transition-colors bg-slate-800/50 border border-slate-700"
                 >
                   <X className="w-6 h-6" />
                 </button>
               </div>
 
-              <div className="p-6 space-y-6">
-                <div className="relative aspect-video bg-slate-950 rounded-2xl border border-slate-800 overflow-hidden">
+              <div className="p-6 grid grid-cols-1 lg:grid-cols-12 gap-8">
+                {/* Simulation Area (Left) */}
+                <div className="lg:col-span-8 relative bg-slate-950 rounded-2xl border border-slate-800 overflow-hidden shadow-inner min-h-[400px]">
                   <canvas 
                     ref={modalCanvasRef}
-                    width={600}
-                    height={400}
+                    width={800}
+                    height={500}
                     onClick={processState === 'collecting' ? handleModalClick : undefined}
                     onMouseMove={processState === 'collecting' ? handleModalMouseMove : undefined}
                     onMouseLeave={() => { mousePosRef.current = null; }}
                     className={cn(
-                      "w-full h-full",
+                      "w-full h-full object-contain",
                       processState === 'collecting' ? "cursor-crosshair" : ""
                     )}
                   />
                   {processState === 'collecting' && (
-                    <div className="absolute top-4 left-4 right-4 flex justify-between items-start pointer-events-none">
-                      <div className="bg-slate-900/80 backdrop-blur-sm p-3 rounded-xl border border-slate-700/50">
-                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Target Equation</p>
-                        <p className="text-xs font-mono text-emerald-400">
+                    <div className="absolute top-4 left-4 p-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg backdrop-blur-sm pointer-events-none">
+                      <span className="text-[10px] font-black text-emerald-400/70 uppercase">Interactive Field</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Controls Area (Right) */}
+                <div className="lg:col-span-4 flex flex-col h-full">
+                  <div className="flex-1 space-y-6">
+                    {/* Target Equation Section */}
+                    {processState === 'collecting' && (
+                      <div className="bg-slate-800/40 p-4 rounded-2xl border border-slate-700/50">
+                        <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-3">Target Equation</h4>
+                        <p className="text-sm font-bold text-emerald-400 leading-relaxed font-mono">
                           {activeProcess === 'photo' && "6 CO2 + 6 H2O + Light → ATP + NADPH + 6 O2"}
                           {activeProcess === 'calvin' && "3 CO2 + 9 ATP + 6 NADPH → 1 G3P (Glucose)"}
                           {activeProcess === 'resp' && "1 Glucose + 6 O2 → 6 CO2 + 6 H2O + 32 ATP"}
                         </p>
                       </div>
-                    </div>
-                  )}
-                </div>
+                    )}
 
-                <div className="space-y-4">
-                  {processState === 'collecting' ? (
-                    <div className="space-y-4">
-                      <div className="bg-slate-800/50 border border-slate-700 p-4 rounded-xl">
-                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Collected Molecules</h4>
-                        <div className="flex flex-wrap gap-2 min-h-[40px]">
-                          {builtEquation.length === 0 && <span className="text-slate-600 italic text-sm">Click molecules to collect...</span>}
+                    {/* Progress / Collection Display */}
+                    <div className="bg-slate-800/60 p-5 rounded-2xl border border-slate-700 flex-1 min-h-[150px] flex flex-col">
+                      <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-4">
+                        {processState === 'collecting' ? 'Current Substrate Lab' : 'Process Explanation'}
+                      </h4>
+                      
+                      {processState === 'collecting' ? (
+                        <div className="flex flex-wrap gap-2">
+                          {builtEquation.length === 0 && (
+                            <div className="text-slate-600 text-sm flex flex-col items-center justify-center w-full py-8 opacity-50">
+                              <MousePointer2 className="w-8 h-8 mb-2 animate-bounce" />
+                              <p className="font-bold">Click molecules to collect</p>
+                            </div>
+                          )}
                           {builtEquation.map((m, i) => (
                             <motion.span 
                               key={i}
                               initial={{ scale: 0, opacity: 0 }}
                               animate={{ scale: 1, opacity: 1 }}
-                              className="px-2 py-1 bg-slate-700 rounded-md text-[10px] font-bold text-emerald-400 border border-emerald-500/20"
+                              className="px-3 py-1.5 bg-emerald-500/10 rounded-lg text-xs font-bold text-emerald-400 border border-emerald-500/30"
                             >
                               {m}
                             </motion.span>
                           ))}
                         </div>
-                      </div>
-                      <div className="flex gap-3">
-                        <button 
-                          onClick={submitEquation}
-                          className="flex-1 py-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-xl transition-all shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2"
-                        >
-                          <Zap className="w-5 h-5" />
-                          SUBMIT EQUATION
-                        </button>
-                        <button 
-                          onClick={handleSkipCollection}
-                          className="px-6 py-4 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 hover:border-red-500 text-red-400 font-bold rounded-xl transition-all flex items-center justify-center gap-2"
-                          title="Skip collection phase at the cost of 15% health"
-                        >
-                          SKIP (-15% HP)
-                        </button>
-                      </div>
+                      ) : (
+                        <div className="space-y-4">
+                          <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl">
+                            <h5 className="text-[10px] font-black text-blue-400 uppercase mb-1">Step {animationStep + 1} of {getAnimationSteps(activeProcess!).length}</h5>
+                            <p className="text-sm text-slate-200 leading-relaxed italic">
+                              "{getAnimationSteps(activeProcess!)[animationStep]}"
+                            </p>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  ) : (
-                    <div className="flex flex-col gap-3">
-                      <div className="bg-slate-800 border border-slate-700 p-4 rounded-xl text-slate-200 text-sm">
-                        <h4 className="font-bold text-emerald-400 mb-2">Animation Step {animationStep + 1} of {getAnimationSteps(activeProcess!).length}</h4>
-                        <p>{getAnimationSteps(activeProcess!)[animationStep]}</p>
-                      </div>
-                      <div className="flex gap-3">
-                        {animationStep < getAnimationSteps(activeProcess!).length - 1 ? (
+
+                    {/* Action Buttons */}
+                    <div className="space-y-3 pt-4 border-t border-slate-800">
+                      {processState === 'collecting' ? (
+                        <>
                           <button 
-                            onClick={() => setAnimationStep(prev => prev + 1)}
-                            className="w-full py-4 bg-blue-500 hover:bg-blue-400 text-white font-bold rounded-xl transition-all shadow-lg shadow-blue-500/20"
+                            onClick={submitEquation}
+                            className="w-full py-4 bg-emerald-500 hover:bg-emerald-400 hover:scale-[1.02] text-slate-950 font-black rounded-xl transition-all shadow-xl shadow-emerald-500/20 flex items-center justify-center gap-3"
                           >
-                            NEXT STEP
+                            <ChevronRight className="w-6 h-6" />
+                            FINISH COLLECTION
                           </button>
-                        ) : (
                           <button 
-                            onClick={finishProcess}
-                            className="w-full py-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-xl transition-all shadow-lg shadow-emerald-500/20"
+                            onClick={handleSkipCollection}
+                            className="w-full py-3 bg-red-500/5 hover:bg-red-500/10 border border-red-500/20 hover:border-red-500/50 text-red-500/70 hover:text-red-500 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2"
                           >
-                            COLLECT REWARD & CLOSE
+                            <AlertCircle className="w-4 h-4" />
+                            Emergency Bypass (-15% HP)
                           </button>
-                        )}
-                      </div>
+                        </>
+                      ) : (
+                        <div className="flex gap-3">
+                          {animationStep < getAnimationSteps(activeProcess!).length - 1 ? (
+                            <button 
+                              onClick={() => setAnimationStep(prev => prev + 1)}
+                              className="w-full py-4 bg-blue-500 hover:bg-blue-400 text-white font-black rounded-xl transition-all shadow-xl shadow-blue-500/20 flex items-center justify-center gap-2"
+                            >
+                              CONTINUE ANIMATION
+                              <ArrowRight className="w-5 h-5" />
+                            </button>
+                          ) : (
+                            <button 
+                              onClick={finishProcess}
+                              className="w-full py-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-xl transition-all shadow-xl shadow-emerald-500/20 flex items-center justify-center gap-2"
+                            >
+                              <Check className="w-5 h-5" />
+                              COLLECT REWARD
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
-                  )}
+                  </div>
                 </div>
               </div>
             </motion.div>

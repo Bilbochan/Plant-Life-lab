@@ -1,17 +1,12 @@
 export type GrowthStage = 
-  | 'Dormant' 
-  | 'Silver Tip' 
-  | 'Green Tip' 
-  | 'Half-inch Green' 
-  | 'Tight Cluster' 
-  | 'First Pink' 
-  | 'First Bloom' 
-  | 'Full Bloom' 
-  | 'Petal Fall' 
-  | 'Fruit Set' 
-  | 'Cell Division' 
-  | 'Cell Enlargement' 
-  | 'Maturation';
+  | 'Seed'
+  | 'Sprout'
+  | 'Bigger Sprout'
+  | 'Sapling'
+  | 'Small Tree'
+  | 'Mature Tree'
+  | 'Flowering Tree'
+  | 'Fruiting Tree';
 
 export interface GameState {
   day: number;
@@ -30,6 +25,8 @@ export interface GameState {
   respDoneToday: boolean;
   weather: 'Sunny' | 'Cloudy' | 'Rainy';
   growthPoints: number; // Progress towards next stage
+  windSpeed: number; // 0 to 100
+  treeSeed: number; // Seed for consistent random generation
   // Resource tracking for particles
   waterConsumed: number;
   lightConsumed: number;
